@@ -1,0 +1,57 @@
+#!/bin/bash
+apt update && apt upgrade -y
+apt install -y wireguard
+wg genkey | tee /etc/wireguard/privatekey | wg pubkey | tee /etc/wireguard/publickey
+chmod 600 /etc/wireguard/privatekey
+
+ip a
+
+# Создать конфиг wireguard
+# <privatekey> - содержимое файла /etc/wireguard/privatekey
+# <network_interface> заменить на название сетевого интерфейса
+echo "
+[Interface]
+PrivateKey = </etc/wireguard/privatekey>
+Address = 10.0.0.1/24
+ListenPort = 51830
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o <network_interface> -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o <network_interface> -j MASQUERADE
+" > /etc/wireguard/wg0.conf
+
+# настроить ip forwarding
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+sysctl -p
+
+# Включаем systemd демон с wireguard:
+systemctl enable wg-quick@wg0.service
+systemctl start wg-quick@wg0.service
+systemctl status wg-quick@wg0.service
+
+# создать ключ клиента
+wg genkey | tee /etc/wireguard/user1_privatekey | wg pubkey | tee /etc/wireguard/user1_publickey
+
+# добавить публичный ключ в конфиг сервера
+echo "
+[Peer]
+PublicKey = <CLIEN-PUBKEY>
+AllowedIPs = 10.0.0.2/32
+" >> /etc/wireguard/wg0.conf
+
+# перезагрузить сервис wireguard
+systemctl restart wg-quick@wg0
+systemctl status wg-quick@wg0
+
+
+# на локальном компе создать conf файл:
+echo "
+[Interface]
+PrivateKey = <CLIENT-PRIVATE-KEY>
+Address = 10.0.0.2/32
+DNS = 8.8.8.8
+
+[Peer]
+PublicKey = <SERVER-PUBKEY>
+Endpoint = <SERVER-IP>:51830
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 20
+" > user1_wg.conf
